@@ -1,6 +1,6 @@
 # 🍄 SporeVault（繁體中文說明）
 
-[English](./README.md) | [繁體中文](./README.zh-TW.md) | [AI / Agent 索引 (`llms.txt`)](./llms.txt)
+[English](./README.md) | [繁體中文](./README.zh-TW.md) | [AI / Agent 索引 (`llms.txt`)](./llms.txt) | [🍄 SporeFlow](https://github.com/exefncs2/sporeflow) | [🛡️ SporeGuard](https://github.com/exefncs2/sporeguard)
 
 ![SporeVault 介面預覽](./docs/sporevault-preview.png)
 

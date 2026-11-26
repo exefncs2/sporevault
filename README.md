@@ -3,7 +3,7 @@
 **Zero-dependency Pure Rust persistent mycelium memory store paired with [SporeFlow](https://github.com/exefncs2/sporeflow).**  
 Single `~610 KB` binary · Immutable sequential IDs · Mandatory millisecond (`ms`) in/out timestamps · Clusters & `#hashtag` flags · Mini `SELECT` queries · True server-side pagination · Bioluminescent mushroom web UI (`127.0.0.1:8081`).
 
-[English](./README.md) | [繁體中文](./README.zh-TW.md) | [AI / Agent Index (`llms.txt`)](./llms.txt)
+[English](./README.md) | [繁體中文](./README.zh-TW.md) | [AI / Agent Index (`llms.txt`)](./llms.txt) | [🍄 SporeFlow](https://github.com/exefncs2/sporeflow) | [🛡️ SporeGuard](https://github.com/exefncs2/sporeguard)
 
 ![SporeVault Bioluminescent Mushroom UI](./docs/sporevault-preview.png)
 
