@@ -24,7 +24,7 @@ Single `~610 KB` binary · Immutable sequential IDs · Mandatory millisecond (`m
 ## Honest Scope & Boundaries
 
 - **Best fit**: Ultra-lightweight local knowledge/log/code pre-filter in front of an LLM/Agent (cut 20s full-file prompts down to 2s by grabbing the top chunks in `~16 ms`), or a zero-bloat companion store for SporeFlow.
-- **Not a replacement for SQLite3 / Qdrant**: No SQL JOINs, no B-Tree indexes, and currently capped at `980` synced vectors per single `/v1/pool` HTTP batch (matching SporeFlow's 512 KB HTTP buffer).
+- **Not a replacement for SQLite3 / Qdrant**: No SQL JOINs, no B-Tree indexes, and currently capped at `7,800` synced vectors per single `/v1/pool` HTTP batch (matching SporeFlow v0.5's 4 MB HTTP buffer).
 
 ---
 

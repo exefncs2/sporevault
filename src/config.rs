@@ -16,8 +16,8 @@ pub const VECTOR_BYTES: usize = VECTOR_DIM * 4;
 pub const CONDUIT_REQ_BYTES: usize = MICRO_BATCH_SIZE * VECTOR_BYTES;
 pub const CONDUIT_RESP_BYTES: usize = 56;
 
-/// SporeFlow HTTP /v1/pool 單次接收上限為 512KB（扣除 HTTP Header 後安全上限為 980 筆向量）
-pub const MAX_POOL_SYNC_VECTORS: usize = 980;
+/// SporeFlow v0.5 HTTP /v1/pool 單次接收上限為 4MB（扣除 HTTP Header 後安全上限為 7,800 筆向量）
+pub const MAX_POOL_SYNC_VECTORS: usize = 7_800;
 
 /// 預設切塊行數（匯入文字檔時每幾行切成一筆可檢索片段）
 pub const DEFAULT_CHUNK_LINES: usize = 6;

@@ -25,7 +25,7 @@
 | [src/core.rs](./src/core.rs) | 單檔原子落盤（`vault.svdb`）、強制 `ms` 時間戳、自動叢集分類、`#hashtag` 抽取（排除 CSS 色碼）、6 槽 `:9090` 直連客戶端。 |
 | [src/main.rs](./src/main.rs) | CLI 指令集、小 `SELECT` 解析器，以及僅綁定 `127.0.0.1:8081` 的發光蘑菇主題看內容網頁。 |
 
-- **誠實限制**：不是拿來取代 SQLite3（不支援 JOIN / B-Tree）或百萬級向量庫；單次同步上限為 `980` 筆片段（對齊 SporeFlow `/v1/pool` 512 KB HTTP 緩衝區）。最適合當作**個人本機 AI / Agent 前置快篩庫**。
+- **誠實限制**：不是拿來取代 SQLite3（不支援 JOIN / B-Tree）或百萬級向量庫；單次同步上限為 `7,800` 筆片段（對齊 SporeFlow v0.5 的 4 MB `/v1/pool` HTTP 緩衝區）。最適合當作**個人本機 AI / Agent 前置快篩庫**。
 
 ---
 
