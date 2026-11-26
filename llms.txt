@@ -1,0 +1,20 @@
+# SporeVault
+
+> Zero-dependency Pure Rust persistent mycelium memory store paired with SporeFlow (`127.0.0.1:9090` raw binary conduit).
+
+## Quick Facts
+
+- Repository: https://github.com/exefncs2/sporevault
+- Companion Engine: https://github.com/exefncs2/sporeflow
+- Dependencies: `0` external crates (pure Rust `std`)
+- Storage Format: Single binary file `~/.local/share/sporevault/vault.svdb` (`SPVDB003`: immutable sequential `u32` ID, mandatory `u64` epoch `ms` timestamp, `cluster`, `#hashtag` flags, source, text, 128D `f32` vector)
+- Local Web UI: `http://127.0.0.1:8081/` (localhost-only, clusters, `#hashtag` chips, mini `SELECT`, true pagination, mandatory `ms` in/out timestamps)
+
+## CLI & HTTP API (`127.0.0.1:8081`)
+
+- `sporevault ingest <path>`: Chunk text/code files, assign immutable IDs + `ms` timestamps + clusters + `#hashtag` flags, and sync raw `f32` bytes to `http://127.0.0.1:8080/v1/pool`.
+- `sporevault query "<text or #tag>"`: Pack 6 query slots over `tcp://127.0.0.1:9090` and return ranked Top-K chunks with `ms` timing.
+- `GET /api/records?cluster=&tag=&file=&kw=&page=1&page_size=20`: Paginated browse (`~0.25 ms`).
+- `GET /api/select?expr=SELECT * WHERE id>=500 cluster=rust-code LIMIT 10`: Mini structured `SELECT`.
+- `GET /api/search?q=...&cluster=&tag=`: Direct `:9090` vector search with cluster/tag pruning.
+- `POST /api/add?cluster=notes`: Append immutable note, persist, and sync to SporeFlow.
