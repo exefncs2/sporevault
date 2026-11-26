@@ -58,6 +58,14 @@ pub struct VaultRecord {
     pub vector: [f32; VECTOR_DIM],
 }
 
+impl VaultRecord {
+    /// 是否為已清除之墓碑槽位（保留槽位編號不移位，使其他紀錄之不可變 ID 永遠鎖死）
+    #[inline]
+    pub fn is_purged(&self) -> bool {
+        self.source == "[purged]"
+    }
+}
+
 /// :9090 直連微批次查詢回傳結果（強制附帶進出毫秒時間戳 `in_ms` / `out_ms` 與毫秒耗時）
 #[derive(Debug, Clone)]
 pub struct ConduitBatchHit {
@@ -329,9 +337,56 @@ impl SporeVault {
         Ok((sync_count, elapsed_us, body))
     }
 
-    /// O(1) 依 ID 取出原文紀錄
+    /// O(1) 依 ID 取出原文紀錄（已清除之墓碑回傳 None）
     pub fn get(&self, id: u32) -> Option<&VaultRecord> {
-        self.records.get(id as usize)
+        self.records.get(id as usize).filter(|r| !r.is_purged())
+    }
+
+    /// 有效（未清除）紀錄總數
+    pub fn active_count(&self) -> usize {
+        self.records.iter().filter(|r| !r.is_purged()).count()
+    }
+
+    /// 依 `#hashtag` 軟清除（將該槽位文字與向量歸零為墓碑，其餘紀錄的不可變 ID 絕不錯位）
+    pub fn purge_by_tag(&mut self, tag: &str) -> usize {
+        let norm = if tag.starts_with('#') {
+            tag.to_lowercase()
+        } else {
+            format!("#{}", tag.to_lowercase())
+        };
+        let mut count = 0usize;
+        for rec in &mut self.records {
+            if !rec.is_purged() && rec.tags.iter().any(|t| t == &norm) {
+                rec.source = "[purged]".to_string();
+                rec.text.clear();
+                rec.tags.clear();
+                rec.vector = [0.0f32; VECTOR_DIM];
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// 依叢集 `cluster` 軟清除（保留其餘紀錄的不可變 ID）
+    pub fn purge_by_cluster(&mut self, cluster: &str) -> usize {
+        let mut count = 0usize;
+        for rec in &mut self.records {
+            if !rec.is_purged() && rec.cluster == cluster {
+                rec.source = "[purged]".to_string();
+                rec.text.clear();
+                rec.tags.clear();
+                rec.vector = [0.0f32; VECTOR_DIM];
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// 全數清空（歸零所有紀錄，重新從 ID #0 開始）
+    pub fn purge_all(&mut self) -> usize {
+        let count = self.active_count();
+        self.records.clear();
+        count
     }
 }
 

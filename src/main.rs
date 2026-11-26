@@ -30,7 +30,9 @@ fn print_usage() {
     println!("  sporevault list                    列出叢集與 #hashtag 旗幟統計");
     println!("  sporevault sync                    重開機後將本地 vault.svdb 秒刷回 SporeFlow");
     println!("  sporevault status                  查看資料庫狀態與 SporeFlow 連線");
-    println!("  sporevault clear                   清空本地資料庫");
+    println!("  sporevault purge --tag <#標籤>     依 #hashtag 軟清除（保留其餘紀錄鎖定 ID）");
+    println!("  sporevault purge --cluster <叢集>  依叢集軟清除（保留其餘紀錄鎖定 ID）");
+    println!("  sporevault clear                   清空全部本地紀錄並重置編號");
 }
 
 fn main() {
@@ -183,6 +185,37 @@ fn main() {
                 if conduit_ok { "✅ 直通正常" } else { "❌ 未啟動" }
             );
             println!("  └─ 蘑菇介面     : http://{DEFAULT_UI_ADDR}");
+        }
+        "purge" => {
+            if args.len() < 3 {
+                eprintln!("用法：sporevault purge --tag #note  或  sporevault purge --cluster notes");
+                std::process::exit(1);
+            }
+            let in_ms = now_epoch_ms();
+            let t0 = Instant::now();
+            let mut vault = SporeVault::load(&vault_path).unwrap_or_else(|e| {
+                eprintln!("讀取資料庫失敗：{e}");
+                std::process::exit(1);
+            });
+            let removed = match args[1].as_str() {
+                "--tag" | "-t" => vault.purge_by_tag(&args[2]),
+                "--cluster" | "-c" => vault.purge_by_cluster(&args[2]),
+                _ => {
+                    eprintln!("未知選項：{}（請用 --tag 或 --cluster）", args[1]);
+                    std::process::exit(1);
+                }
+            };
+            vault.save(&vault_path).expect("寫入 vault.svdb 失敗");
+            let out_ms = now_epoch_ms();
+            println!(
+                "🧹 已清除 {} 筆（剩餘有效 {} 筆，其餘 ID 維持鎖死）| 進 {} ➔ 出 {} | {:.3} ms",
+                removed,
+                vault.active_count(),
+                format_taipei_ms(in_ms),
+                format_taipei_ms(out_ms),
+                t0.elapsed().as_secs_f64() * 1_000.0
+            );
+            sync_and_report(&vault);
         }
         "clear" => {
             if vault_path.exists() {
@@ -526,6 +559,9 @@ fn handle_ui_client(mut stream: TcpStream, state: Arc<Mutex<SporeVault>>, vault_
         let mut matched_indices: Vec<usize> = Vec::new();
 
         for (idx, rec) in guard.records.iter().enumerate() {
+            if rec.is_purged() {
+                continue;
+            }
             *clusters_map.entry(rec.cluster.clone()).or_insert(0) += 1;
             for t in &rec.tags {
                 *tags_map.entry(t.clone()).or_insert(0) += 1;
@@ -552,7 +588,7 @@ fn handle_ui_client(mut stream: TcpStream, state: Arc<Mutex<SporeVault>>, vault_
             matched_indices.push(idx);
         }
 
-        let total_records = guard.records.len();
+        let total_records = guard.active_count();
         let total_filtered = matched_indices.len();
         let total_pages = total_filtered.div_ceil(page_size).max(1);
         let clamped_page = page.min(total_pages);
@@ -625,6 +661,9 @@ fn handle_ui_client(mut stream: TcpStream, state: Arc<Mutex<SporeVault>>, vault_
         let mut matched_total = 0usize;
         let mut items_json = Vec::new();
         for rec in &guard.records {
+            if rec.is_purged() {
+                continue;
+            }
             if let Some(min_id) = parsed.min_id {
                 if rec.id < min_id {
                     continue;
@@ -795,6 +834,62 @@ fn handle_ui_client(mut stream: TcpStream, state: Arc<Mutex<SporeVault>>, vault_
             escape_json(&cluster),
             tags_json,
             created_str,
+            format_taipei_ms(in_ms),
+            format_taipei_ms(out_ms),
+            elapsed_ms,
+            sync_ms
+        );
+        send_http(&mut stream, "200 OK", "application/json; charset=utf-8", &json);
+        return;
+    }
+
+    // 5. 清理紀錄 API（POST /api/purge?tag=... | ?cluster=... | ?all=1）
+    if method == "POST" && path.starts_with("/api/purge") {
+        let tag_opt = query_param(path, "tag").unwrap_or_default();
+        let cluster_opt = query_param(path, "cluster").unwrap_or_default();
+        let all_flag = query_param(path, "all").unwrap_or_default() == "1";
+        let in_ms = now_epoch_ms();
+        let t0 = Instant::now();
+
+        let (removed, remaining, sync_ms, mode_label) = {
+            let mut guard = state.lock().unwrap();
+            let (rem, label) = if all_flag {
+                (guard.purge_all(), "全部清空".to_string())
+            } else if !tag_opt.is_empty() {
+                (guard.purge_by_tag(&tag_opt), format!("旗幟 {tag_opt}"))
+            } else if !cluster_opt.is_empty() {
+                (guard.purge_by_cluster(&cluster_opt), format!("叢集 {cluster_opt}"))
+            } else {
+                (0, "未指定條件".to_string())
+            };
+            let _ = guard.save(&vault_path);
+            let sync_ms = if guard.records.is_empty() {
+                // 清空時寫入 1 筆零向量重置 SporeFlow 有效掃描區
+                let zero_v = vec![0u8; 512];
+                if let Ok(mut sock) = TcpStream::connect(DEFAULT_HTTP_ADDR) {
+                    let hdr = format!(
+                        "POST /v1/pool HTTP/1.1\r\nHost: {DEFAULT_HTTP_ADDR}\r\nContent-Type: application/octet-stream\r\nContent-Length: 512\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = sock.write_all(hdr.as_bytes());
+                    let _ = sock.write_all(&zero_v);
+                    let _ = sock.flush();
+                }
+                0.5
+            } else {
+                guard
+                    .sync_to_sporeflow(DEFAULT_HTTP_ADDR)
+                    .map(|(_, us, _)| us / 1_000.0)
+                    .unwrap_or(0.0)
+            };
+            (rem, guard.active_count(), sync_ms, label)
+        };
+        let elapsed_ms = t0.elapsed().as_secs_f64() * 1_000.0;
+        let out_ms = now_epoch_ms();
+        let json = format!(
+            "{{\"removed\":{},\"remaining\":{},\"mode\":\"{}\",\"in_str\":\"{}\",\"out_str\":\"{}\",\"elapsed_ms\":{:.3},\"sync_ms\":{:.3}}}",
+            removed,
+            remaining,
+            escape_json(&mode_label),
             format_taipei_ms(in_ms),
             format_taipei_ms(out_ms),
             elapsed_ms,
@@ -1018,6 +1113,16 @@ const VAULT_UI_HTML: &str = r##"<!DOCTYPE html>
 
     <div id="browseTime" class="timebar">⏱️ 分頁讀取：-- ms</div>
 
+    <!-- 清理紀錄工具列（依 #hashtag、依叢集軟清除，或全清） -->
+    <div class="row" style="justify-content:space-between;background:#07100d;border:1px solid #2b2330;padding:6px 10px;border-radius:9px;">
+      <span id="purgeStatus" style="font-size:0.74rem;color:var(--muted);">🧹 清理工具：點左側 #旗幟 或 叢集 可精準清除（保留其餘鎖定 ID）</span>
+      <div class="row" style="gap:6px;">
+        <button class="sec" id="purgeTagBtn" style="padding:4px 9px;font-size:0.74rem;border-color:#f59e0b;color:#fde68a;" onclick="purgeBy('tag')" disabled>🧹 清除此 #旗幟</button>
+        <button class="sec" id="purgeClusterBtn" style="padding:4px 9px;font-size:0.74rem;border-color:#c084fc;color:#e9d5ff;" onclick="purgeBy('cluster')" disabled>🧹 清除此叢集</button>
+        <button class="sec" style="padding:4px 9px;font-size:0.74rem;border-color:#ef4444;color:#fca5a5;" onclick="purgeBy('all')">🗑️ 全清</button>
+      </div>
+    </div>
+
     <div class="pager">
       <button class="sec" id="prevBtn" onclick="changePage(-1)">◀ 上一頁</button>
       <span id="pageInfo">第 1 / 1 頁</span>
@@ -1125,6 +1230,10 @@ async function loadRecords() {
   document.getElementById('pageInfo').innerText = `第 ${d.page} / ${d.total_pages} 頁（符合 ${d.total_filtered} 筆，本頁 ${d.records.length} 筆）`;
   document.getElementById('prevBtn').disabled = (d.page <= 1);
   document.getElementById('nextBtn').disabled = (d.page >= d.total_pages);
+  document.getElementById('purgeTagBtn').disabled = (activeTag === '');
+  document.getElementById('purgeTagBtn').innerText = activeTag ? `🧹 清除 ${activeTag}` : '🧹 清除此 #旗幟';
+  document.getElementById('purgeClusterBtn').disabled = (activeCluster === '');
+  document.getElementById('purgeClusterBtn').innerText = activeCluster ? `🧹 清除 ${activeCluster}` : '🧹 清除此叢集';
 
   document.getElementById('clusterList').innerHTML =
     `<button class="side-btn ${activeCluster===''?'active':''}" onclick="selectCluster('')"><span>全部叢集</span><span>${d.total}</span></button>` +
@@ -1154,6 +1263,31 @@ function selectTag(name) { activeTag = (activeTag === name ? '' : name); current
 function selectFile(name) { activeFile = (activeFile === name ? '' : name); currentPage = 1; loadRecords(); }
 function resetPageAndLoad() { currentPage = 1; loadRecords(); }
 function resetAllFilters() { activeCluster = ''; activeTag = ''; activeFile = ''; document.getElementById('kwFilter').value = ''; currentPage = 1; loadRecords(); }
+async function purgeBy(mode) {
+  let url = '/api/purge?';
+  let msg = '';
+  if (mode === 'tag') {
+    if (!activeTag) return;
+    msg = `確定清除所有含 ${activeTag} 的紀錄？（其餘紀錄的 🔒ID 維持鎖定不變）`;
+    url += 'tag=' + encodeURIComponent(activeTag);
+  } else if (mode === 'cluster') {
+    if (!activeCluster) return;
+    msg = `確定清除整個叢集 [${activeCluster}] 的紀錄？（其餘紀錄的 🔒ID 維持鎖定不變）`;
+    url += 'cluster=' + encodeURIComponent(activeCluster);
+  } else {
+    msg = '⚠️ 確定要「全部清空」所有紀錄並重置編號嗎？此操作無法復原。';
+    url += 'all=1';
+  }
+  if (!confirm(msg)) return;
+  const r = await fetch(url, { method: 'POST' });
+  const d = await r.json();
+  document.getElementById('purgeStatus').innerText = `🧹 已清理 [${d.mode}] ${d.removed} 筆（剩餘 ${d.remaining} 筆）| 進 ${d.in_str} ➔ 出 ${d.out_str} | ${d.elapsed_ms.toFixed(3)} ms`;
+  if (mode === 'tag') activeTag = '';
+  if (mode === 'cluster') activeCluster = '';
+  if (mode === 'all') { activeTag = ''; activeCluster = ''; activeFile = ''; }
+  currentPage = 1;
+  loadRecords();
+}
 function changePage(delta) { currentPage = Math.max(1, Math.min(totalPages, currentPage + delta)); loadRecords(); }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
