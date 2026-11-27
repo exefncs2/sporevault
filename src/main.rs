@@ -465,6 +465,27 @@ fn format_tags_json(tags: &[String]) -> String {
 
 fn run_vault_web_ui(vault_path: PathBuf) {
     let vault = SporeVault::load(&vault_path).unwrap_or_else(|_| SporeVault::new());
+
+    // 啟動時自動將既有 vault.svdb 同步至 SporeFlow（最多重試 5 次，防止重開機後 SporeFlow 記憶體池歸零造成誤報）
+    if !vault.records.is_empty() {
+        for attempt in 1..=5 {
+            match vault.sync_to_sporeflow(DEFAULT_HTTP_ADDR) {
+                Ok((cnt, us, _)) => {
+                    println!(
+                        "⚡ 啟動自動同步完成：已將 {} 筆向量刷回 SporeFlow ({:.3} ms)",
+                        cnt,
+                        us / 1_000.0
+                    );
+                    break;
+                }
+                Err(e) => {
+                    eprintln!("⏳ 第 {attempt}/5 次同步 SporeFlow 尚未就緒 ({e})，1 秒後重試...");
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+            }
+        }
+    }
+
     let state = Arc::new(Mutex::new(vault));
     let listener = TcpListener::bind(DEFAULT_UI_ADDR)
         .unwrap_or_else(|e| panic!("無法綁定 {DEFAULT_UI_ADDR}: {e}"));
@@ -738,6 +759,48 @@ fn handle_ui_client(mut stream: TcpStream, state: Arc<Mutex<SporeVault>>, vault_
             send_http(&mut stream, "200 OK", "application/json; charset=utf-8", "{\"hits\":[],\"elapsed_ms\":0}");
             return;
         }
+
+        // 若明確指定叢集或 #hashtag 旗幟，優先於該範圍內執行精準餘弦比對，避免跨叢集（如程式碼）稀釋資安基線命中
+        if !cluster_filter.is_empty() || !tag_filter.is_empty() {
+            let in_ms = now_epoch_ms();
+            let t0 = Instant::now();
+            let guard = state.lock().unwrap();
+            let scored = guard.search_scoped_topk(&q, &cluster_filter, &tag_filter, 5);
+            let mut hits_json = Vec::new();
+            for (id, score) in scored {
+                if score < MIN_DISPLAY_SCORE {
+                    continue;
+                }
+                if let Some(rec) = guard.get(id) {
+                    hits_json.push(format!(
+                        "{{\"id\":{},\"cluster\":\"{}\",\"tags\":[{}],\"score\":{:.4},\"source\":\"{}\",\"created_str\":\"{}\",\"text\":\"{}\"}}",
+                        rec.id,
+                        escape_json(&rec.cluster),
+                        format_tags_json(&rec.tags),
+                        score,
+                        escape_json(&rec.source),
+                        format_taipei_ms(rec.created_at_ms),
+                        escape_json(&rec.text)
+                    ));
+                }
+            }
+            drop(guard);
+            let elapsed_ms = t0.elapsed().as_secs_f64() * 1_000.0;
+            let out_ms = now_epoch_ms();
+            let json = format!(
+                "{{\"in_str\":\"{}\",\"out_str\":\"{}\",\"elapsed_ms\":{:.3},\"kernel_ms\":{:.3},\"zero_ms\":0.000,\"applied_cluster\":\"{}\",\"applied_tag\":\"{}\",\"hits\":[{}]}}",
+                format_taipei_ms(in_ms),
+                format_taipei_ms(out_ms),
+                elapsed_ms,
+                elapsed_ms,
+                escape_json(&cluster_filter),
+                escape_json(&tag_filter),
+                hits_json.join(",")
+            );
+            send_http(&mut stream, "200 OK", "application/json; charset=utf-8", &json);
+            return;
+        }
+
         let mut client = match DirectConduitClient::connect(DEFAULT_BINARY_ADDR) {
             Ok(c) => c,
             Err(e) => {

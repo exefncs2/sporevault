@@ -347,6 +347,37 @@ impl SporeVault {
         self.records.iter().filter(|r| !r.is_purged()).count()
     }
 
+    /// 依指定叢集／旗幟在本地執行精準 128D 餘弦點積 Top-K（避免跨叢集干擾，例如 security-baseline 不被 rust-code 稀釋）
+    pub fn search_scoped_topk(
+        &self,
+        query: &str,
+        cluster_filter: &str,
+        tag_filter: &str,
+        top_k: usize,
+    ) -> Vec<(u32, f32)> {
+        let qvec = encode_text_to_128d(query);
+        let mut scored: Vec<(u32, f32)> = Vec::new();
+        for rec in &self.records {
+            if rec.is_purged() {
+                continue;
+            }
+            if !cluster_filter.is_empty() && rec.cluster != cluster_filter {
+                continue;
+            }
+            if !tag_filter.is_empty() && !rec.tags.iter().any(|t| t == tag_filter) {
+                continue;
+            }
+            let mut dot = 0.0f32;
+            for d in 0..VECTOR_DIM {
+                dot += qvec[d] * rec.vector[d];
+            }
+            scored.push((rec.id, dot));
+        }
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(top_k);
+        scored
+    }
+
     /// 依 `#hashtag` 軟清除（將該槽位文字與向量歸零為墓碑，其餘紀錄的不可變 ID 絕不錯位）
     pub fn purge_by_tag(&mut self, tag: &str) -> usize {
         let norm = if tag.starts_with('#') {
